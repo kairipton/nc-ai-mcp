@@ -131,3 +131,34 @@ def test_never_overwrites_original_or_existing(tmp_path):
     a = processing.trim_silence(src)["output"]
     b = processing.trim_silence(src)["output"]
     assert a != b and b.endswith("a_trim2.wav")
+
+
+# ---------------- 여러 소리가 든 파일
+
+def three_hits():
+    hit = tone(0.3, freq=120)
+    gap = np.zeros((int(0.6 * SR), 1), dtype=np.float32)
+    return np.concatenate([gap[:4410], hit, gap, hit * 0.7, gap, hit, gap])
+
+
+def test_event_count_and_first_event_attack(tmp_path):
+    m = analysis.analyze(write_wav(tmp_path / "k.wav", three_hits()))["metrics"]
+    assert m["event_count"] == 3
+    assert m["attack_ms"] < 15 and m["first_event_duration_s"] < 0.5  # 파일 전체(2.5s)가 아니라 첫 소리 기준
+    assert m["effective_duration_s"] > 1.5
+
+
+def test_split_events_writes_each_hit(tmp_path):
+    src = write_wav(tmp_path / "k.wav", three_hits())
+    res = processing.split_events(src)
+    assert res["event_count"] == 3
+    names = [o["output"].rsplit("\\", 1)[-1].rsplit("/", 1)[-1] for o in res["outputs"]]
+    assert names == ["k_ev01.wav", "k_ev02.wav", "k_ev03.wav"]
+    for o in res["outputs"]:
+        assert 0.25 < o["duration_s"] < 0.6
+        assert analysis.analyze(__import__("pathlib").Path(o["output"]))["metrics"]["event_count"] == 1
+
+
+def test_split_events_silent_file_errors(tmp_path):
+    with pytest.raises(NcAiError):
+        processing.split_events(write_wav(tmp_path / "z.wav", np.zeros((SR, 1), dtype=np.float32)))

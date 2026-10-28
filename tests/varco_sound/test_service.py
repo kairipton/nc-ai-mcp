@@ -86,12 +86,19 @@ def test_variation_without_region_sends_no_include(svc, api, tmp_path):
     assert "include" not in api.bodies()[0]
 
 
-@pytest.mark.parametrize("dur", [0.3, 10.5])
-def test_variation_rejects_out_of_range_length(svc, api, tmp_path, dur):
-    src = write_wav(tmp_path / "src.wav", tone(dur))
+def test_variation_rejects_too_long(svc, api, tmp_path):
+    src = write_wav(tmp_path / "src.wav", tone(10.5))
     with pytest.raises(NcAiError) as e:
         run(svc.generate_from_sample(str(src)))
     assert "길이" in e.value.message and e.value.allowed == "0.5~10.0s" and not api.requests
+
+
+def test_variation_pads_short_source(svc, api, tmp_path):
+    import base64, io, soundfile as sf
+    src = write_wav(tmp_path / "hit.wav", tone(0.27))
+    res = run(svc.generate_from_sample(str(src), n=1))
+    sent = sf.info(io.BytesIO(base64.b64decode(api.bodies()[0]["source"])))
+    assert sent.duration >= 0.5 and res["params"]["padded_to_s"] == 0.5
 
 
 @pytest.mark.parametrize("b,e_", [(1.5, 1.0), (0.0, 5.0)])
@@ -217,3 +224,12 @@ def test_compare_ranking(svc, tmp_path):
                             goal="묵직한 저음")
     assert res["ranking"][0]["path"] == str(low) and res["ranking"][0]["rank"] == 1
     assert len(res["table"]) == 2 and json.dumps(res, ensure_ascii=False)
+
+
+def test_split_events_records_manifest(svc, tmp_path):
+    from .test_audio import three_hits
+    src = write_wav(tmp_path / "k.wav", three_hits())
+    res = svc.split_events(str(src), note="split")
+    rec = manifest.load(tmp_path)[0]
+    assert rec["tool"] == "split_events" and len(rec["files"]) == 3 and rec["parents"] == [str(src)]
+    assert res["outputs"][0]["quick_metrics"]["event_count"] == 1

@@ -22,7 +22,7 @@ from nc_ai_common.errors import NcAiError, invalid
 SERVICE = "VARCO Sound"
 SEED_NOTE = "VARCO Sound API 는 시드를 지원하지 않습니다. 같은 파라미터로도 매번 다른 결과가 나옵니다."
 REMAINING_NOTE = "공개 API 에 크레딧 잔액 조회가 없습니다. 대시보드(platform.nc-ai.com › 대시보드 › 현황)에서 확인하세요."
-QUICK_METRICS = ("effective_duration_s", "peak_dbfs", "integrated_lufs", "attack_ms", "decay_ms",
+QUICK_METRICS = ("effective_duration_s", "event_count", "peak_dbfs", "integrated_lufs", "attack_ms", "decay_ms",
                  "spectral_centroid_hz", "low_ratio", "high_ratio")
 
 
@@ -176,7 +176,7 @@ class VarcoService:
         _check_range("strength", strength, *VAR_STRENGTH_RANGE)
         _check_range("n", n, 1, self.settings.max_candidates)
         spec = ENDPOINTS["variation"]
-        b64, duration = audio_io.encode_for_api(src, min_s=spec.min_input_s, max_s=spec.max_input_s)
+        b64, duration = audio_io.encode_for_api(src, min_s=spec.min_input_s, max_s=spec.max_input_s, pad_to_min=True)
         region = self._region(include_begin, include_end, duration, "include")
         batches = [min(VAR_MAX_PER_CALL, n - i) for i in range(0, n, VAR_MAX_PER_CALL)]
         payloads = []
@@ -185,7 +185,8 @@ class VarcoService:
             if region:
                 body["include"] = region
             payloads.append((body, 0))
-        params = {"source": str(src), "n": n, "strength": strength, "include": region}
+        params = {"source": str(src), "n": n, "strength": strength, "include": region,
+                  "padded_to_s": spec.min_input_s if duration < (spec.min_input_s or 0) else None}
         return await self._generate(tool="generate_from_sample", endpoint="variation", payloads=payloads,
                                     params=params, folder=self._folder(output_dir),
                                     purpose=purpose, description=description or src.stem, note=note,
@@ -286,6 +287,23 @@ class VarcoService:
         params = {"threshold_db": threshold_db, "pad_ms": pad_ms, "trim_start": trim_start, "trim_end": trim_end}
         res = processing.trim_silence(src, output_path=output_path, overwrite=overwrite, **params)
         return self._post("trim_silence", src, res, params, note)
+
+    def split_events(self, path: str, silence_db: float = analysis.DEFAULT_SILENCE_DB, pad_ms: float = 10.0,
+                     min_event_ms: float = 30.0, output_dir: str | None = None,
+                     note: str | None = None) -> dict[str, Any]:
+        src = audio_io.require_file(path)
+        params = {"silence_db": silence_db, "pad_ms": pad_ms, "min_event_ms": min_event_ms}
+        res = processing.split_events(src, output_dir=output_dir, **params)
+        files = [o["output"] for o in res["outputs"]]
+        rec = manifest.append(Path(files[0]).parent, {"tool": "split_events", "params": params, "seed": None,
+                                                      "parents": self._parents(src), "files": files,
+                                                      "credits_estimated": 0, "note": note,
+                                                      "description": src.stem}, SERVICE)
+        for o in res["outputs"]:
+            m = analysis.analyze(Path(o["output"]))["metrics"]
+            o["quick_metrics"] = {k: m[k] for k in QUICK_METRICS}
+        return {"tool": "split_events", "source": str(src), **res, "manifest_id": rec["id"],
+                "created_at": rec["created_at"], "credits_estimated": 0}
 
     def normalize(self, path: str, mode: str = "lufs", target: float | None = None, peak_ceiling_db: float = -1.0,
                   output_path: str | None = None, overwrite: bool = False, note: str | None = None) -> dict[str, Any]:

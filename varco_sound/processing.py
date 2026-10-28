@@ -15,7 +15,7 @@ import pyloudnorm
 from scipy import signal
 
 from . import audio_io
-from .analysis import DEFAULT_SILENCE_DB, FRAME_MS, _envelope_db
+from .analysis import DEFAULT_SILENCE_DB, FRAME_MS, _envelope_db, detect_events
 from nc_ai_common.errors import invalid
 
 
@@ -67,6 +67,36 @@ def trim_silence(src: Path, threshold_db: float = DEFAULT_SILENCE_DB, pad_ms: fl
     return {"output": str(out), "removed_start_ms": round(start / sr * 1000, 1),
             "removed_end_ms": round((len(data) - end) / sr * 1000, 1),
             "duration_before_s": round(len(data) / sr, 3), "duration_after_s": round((end - start) / sr, 3)}
+
+
+def split_events(src: Path, silence_db: float = DEFAULT_SILENCE_DB, pad_ms: float = 10.0,
+                 min_event_ms: float = 30.0, output_dir: str | None = None) -> dict[str, Any]:
+    """한 파일에 여러 번 들어 있는 소리를 하나씩 잘라 src_ev01.wav, src_ev02.wav … 로 저장한다."""
+    data, sr = audio_io.load(src)
+    env = _envelope_db(data.mean(axis=1), sr)
+    hop = max(1, int(sr * FRAME_MS / 1000))
+    pad = int(sr * pad_ms / 1000)
+    events = [e for e in detect_events(env, silence_db) if (e[2] - e[0] + 1) * FRAME_MS >= min_event_ms]
+    if not events:
+        raise invalid("나눌 소리를 찾지 못했습니다.",
+                      fix="silence_db 를 더 낮게(예: -60) 주거나 min_event_ms 를 줄여 다시 호출하세요.")
+    folder = audio_io.resolve_path(output_dir) if output_dir else src.parent
+    fmt = _out_format(src)
+    outputs = []
+    for i, (start, peak, end) in enumerate(events, 1):
+        a = max(0, start * hop - pad)
+        b = min(len(data), (end + 1) * hop + pad)
+        out = folder / f"{src.stem}_ev{i:02d}.{fmt}"
+        n = 2
+        while out.exists():
+            out = folder / f"{src.stem}_ev{i:02d}_{n}.{fmt}"
+            n += 1
+        audio_io.write(out, data[a:b], sr, fmt)
+        seg = data[a:b]
+        outputs.append({"output": str(out), "start_s": round(a / sr, 3), "end_s": round(b / sr, 3),
+                        "duration_s": round((b - a) / sr, 3),
+                        "peak_dbfs": round(20 * math.log10(max(float(np.max(np.abs(seg))), 1e-6)), 2)})
+    return {"outputs": outputs, "event_count": len(outputs)}
 
 
 def normalize(src: Path, mode: str = "lufs", target: float | None = None, peak_ceiling_db: float = -1.0,

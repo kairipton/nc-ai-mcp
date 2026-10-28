@@ -83,18 +83,23 @@ def sniff_extension(blob: bytes) -> str:
 
 
 def encode_for_api(path: Path, *, min_s: float | None, max_s: float | None, label: str = "source",
-                   mono: bool = False) -> tuple[str, float]:
+                   mono: bool = False, pad_to_min: bool = False) -> tuple[str, float]:
     """API 입력용 base64 문자열을 만든다.
 
     어떤 포맷이 들어와도 16bit WAV 로 바꿔 보낸다(API 는 WAV 출력만 문서화되어 있음).
     문서상 길이 범위를 벗어나면 크레딧을 쓰기 전에 실패시킨다.
+    pad_to_min=True 면 최소 길이보다 짧을 때 뒤에 무음을 붙여 최소 길이로 맞춘다(Variation 에서 실측 확인).
+    반환 길이는 패딩 전 원본 길이다.
     """
     data, sr = load(path)
     duration = data.shape[0] / sr
-    if min_s is not None and duration < min_s:
+    if pad_to_min and min_s is not None and duration < min_s:
+        need = int(np.ceil(min_s * sr)) - data.shape[0] + int(0.01 * sr)  # 경계 오차 대비 10ms 여유
+        data = np.concatenate([data, np.zeros((need, data.shape[1]), dtype=data.dtype)])
+    elif min_s is not None and duration < min_s:
         raise invalid(f"{label} 길이 {duration:.2f}s 가 최소 {min_s}s 보다 짧습니다.",
                       allowed=f"{min_s}~{max_s}s",
-                      fix="더 긴 소리를 쓰거나, 꼬리에 무음을 덧붙이지 말고 원본 소리를 길게 생성하세요.")
+                      fix=f"{min_s}s 이상인 소리를 쓰세요(짧은 단발이면 뒤에 무음을 붙여 {min_s}s 이상으로 만든 뒤 다시 호출).")
     if max_s is not None and duration > max_s:
         raise invalid(f"{label} 길이 {duration:.2f}s 가 최대 {max_s}s 를 넘습니다.",
                       allowed=f"{min_s}~{max_s}s",

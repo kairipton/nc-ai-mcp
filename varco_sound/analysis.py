@@ -51,6 +51,53 @@ def _clip_runs(data: np.ndarray, level: float = 0.9999, min_run: int = 3) -> int
     return count
 
 
+EVENT_ON_DB = 15.0   # 최대 레벨 - 15dB 위로 올라오면 '타격 시작'
+EVENT_OFF_DB = 30.0  # 최대 레벨 - 30dB 아래로 내려가면 '타격 끝' (히스테리시스로 잔떨림 무시)
+
+
+def detect_events(env: np.ndarray, silence_db: float = DEFAULT_SILENCE_DB) -> list[tuple[int, int, int]]:
+    """엔벨로프에서 개별 소리(타격) 구간을 찾는다. 반환: [(시작 프레임, 최대 프레임, 끝 프레임)].
+
+    VARCO 는 한 파일에 같은 소리를 여러 번(예: 킥 4~6번) 담아 주는 경우가 있어,
+    어택·감쇠를 파일 전체가 아니라 첫 소리 기준으로 재고, split_events 로 나눌 때 쓴다.
+    - 핵심 구간: 최대-15dB 위로 올라왔다가 최대-30dB 아래로 내려갈 때까지
+    - 시작: 핵심 구간 앞쪽으로 무음 임계값 위인 곳까지 확장
+    - 끝: 뒤쪽으로 무음 임계값 아래가 되거나 다음 소리가 시작되기 직전까지 확장
+    """
+    if not len(env):
+        return []
+    top = float(np.max(env))
+    if top <= silence_db:  # 전체가 무음
+        return []
+    on, off = top - EVENT_ON_DB, max(top - EVENT_OFF_DB, silence_db)
+    cores: list[list[int]] = []
+    active = False
+    for i, v in enumerate(env):
+        if not active and v > on:
+            cores.append([i, i])
+            active = True
+        elif active and v < off:
+            cores[-1][1] = i
+            active = False
+    if active:
+        cores[-1][1] = len(env) - 1
+
+    events: list[tuple[int, int, int]] = []
+    prev_end = -1
+    for k, (c_start, c_end) in enumerate(cores):
+        start = c_start
+        while start - 1 > prev_end and env[start - 1] > silence_db:
+            start -= 1
+        limit = cores[k + 1][0] - 1 if k + 1 < len(cores) else len(env) - 1
+        end = c_end
+        while end + 1 <= limit and env[end + 1] > silence_db:
+            end += 1
+        peak = c_start + int(np.argmax(env[c_start:c_end + 1]))
+        events.append((start, peak, end))
+        prev_end = end
+    return events
+
+
 def analyze(path: Path, silence_db: float = DEFAULT_SILENCE_DB) -> dict[str, Any]:
     data, sr = audio_io.load(path)
     if data.shape[0] == 0:
@@ -72,16 +119,20 @@ def analyze(path: Path, silence_db: float = DEFAULT_SILENCE_DB) -> dict[str, Any
     env = _envelope_db(mono, sr)
     frame_s = FRAME_MS / 1000
     loud = np.where(env > silence_db)[0]
-    if len(loud):
+    events = detect_events(env, silence_db)
+    if len(loud) and events:
         lead_s = loud[0] * frame_s
         trail_s = max(0.0, duration - (loud[-1] + 1) * frame_s)
-        peak_idx = int(np.argmax(env))
-        attack_ms = (peak_idx - loud[0]) * FRAME_MS
-        above = np.where(env[peak_idx:] >= env[peak_idx] - DECAY_DROP_DB)[0]
+        # 어택·감쇠는 첫 소리 기준(한 파일에 소리가 여러 번 들어 있을 수 있음)
+        start, peak_idx, end = events[0]
+        attack_ms = (peak_idx - start) * FRAME_MS
+        above = np.where(env[peak_idx:end + 1] >= env[peak_idx] - DECAY_DROP_DB)[0]
         decay_ms = float(above[-1] * FRAME_MS) if len(above) else 0.0
+        first_event_s = (end - start + 1) * frame_s
         silence_ratio = 1 - len(loud) / len(env)
     else:
         lead_s, trail_s, attack_ms, decay_ms, silence_ratio = duration, 0.0, 0.0, 0.0, 1.0
+        first_event_s = 0.0
 
     # --- 주파수 (무음이 아닌 구간만) ---
     active = mono
@@ -112,6 +163,8 @@ def analyze(path: Path, silence_db: float = DEFAULT_SILENCE_DB) -> dict[str, Any
         "leading_silence_ms": round(lead_s * 1000, 1),
         "trailing_silence_ms": round(trail_s * 1000, 1),
         "silence_ratio": round(float(silence_ratio), 3),
+        "event_count": len(events),
+        "first_event_duration_s": round(first_event_s, 3),
         "attack_ms": round(float(attack_ms), 1),
         "decay_ms": round(float(decay_ms), 1),
         "spectral_centroid_hz": round(centroid, 1),
@@ -146,7 +199,10 @@ def interpret(m: dict[str, Any]) -> dict[str, str]:
     """각 수치를 사람 말로 짧게 해석한다(휴리스틱)."""
     out: dict[str, str] = {}
     a = m["attack_ms"]
-    out["attack"] = f"어택 {a:.0f}ms: " + (
+    ev = m["event_count"]
+    out["events"] = "소리 없음" if ev == 0 else "소리 1개" if ev == 1 else (
+        f"소리 {ev}개가 한 파일에 들어 있음 — 하나만 쓰려면 split_events 로 나누기(어택·감쇠는 첫 소리 기준)")
+    out["attack"] = f"첫 소리 어택 {a:.0f}ms: " + (
         "매우 날카로움(타격·클릭)" if a < 10 else "날카로움" if a < 30 else "보통" if a < 100
         else "부드럽게 시작" if a < 300 else "천천히 커짐(스웰)")
     d = m["decay_ms"]
@@ -184,6 +240,8 @@ def interpret(m: dict[str, Any]) -> dict[str, str]:
 # 지표별 거리 계산 방식: log = 비율 차이(로그), lin = 선형 차이 / scale
 RANKABLE: dict[str, tuple[str, float]] = {
     "effective_duration_s": ("log", 1.0),
+    "first_event_duration_s": ("log", 1.0),
+    "event_count": ("lin", 1.0),
     "duration_s": ("log", 1.0),
     "attack_ms": ("log", 1.0),
     "decay_ms": ("log", 1.0),

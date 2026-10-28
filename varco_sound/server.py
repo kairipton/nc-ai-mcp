@@ -80,12 +80,14 @@ AudioPath = Annotated[str, Field(description="오디오 파일 절대 경로(wav
 
 언제: 새 효과음(타격, UI, 득점, 실패, 발소리, 환경음 등)이 필요할 때. 같은 프롬프트도 매번 다르게 나오므로 n=3~4 로 뽑아 비교한다.
 언제 쓰지 말 것: 멜로디가 있는 음악(모델이 부적합), 이미 비슷한 소리가 있는지 확인 안 했을 때(list_history 먼저).
-결과 특성: 모든 결과는 10초 길이(짧은 소리면 뒤가 무음) → 이후 trim_silence 필수. 44.1kHz 16bit WAV.
+결과 특성(실측): 48kHz 16bit 모노 WAV, 피크 -2dBFS 로 맞춰져 옴. 길이는 가변(1.4~5.8초).
+  한 파일에 같은 소리가 여러 번(실측 2~7번) 들어 있는 경우가 많다 → analyze 의 event_count 확인 후
+  단발이 필요하면 split_events 로 나눈다(나뉜 조각들은 그 자체로 변형 후보가 된다).
 인자:
 - prompt: 최대 200자. 한국어·영어 모두 이해. 핵심 음원/재질 + 동작 + 공간 + 성격 위주로 짧게.
 - n: 후보 수 1~{settings.max_candidates}. API 가 한 번에 3개까지라 3개 단위로 나눠 호출한다.
 - version: v1(기본) 또는 v2. 차이는 문서에 없음.
-비용: 호출 1회(3개) 약 {C_T2S3} 크레딧, 1개면 약 {C_T2S} 크레딧(문서 단가 추정). 시간: 실측 기준 호출당 수십 초(get_guide 참고).
+비용: 호출 1회(3개) 약 {C_T2S3} 크레딧, 1개면 약 {C_T2S} 크레딧(문서 단가 추정). 시간: 실측 호출(3개)당 약 10~11초.
 반환: files[{{path, duration_s, sample_rate, channels, quick_metrics}}], params, request_ids, manifest_id, credits_estimated.
 예: generate_sfx(prompt="heavy leather ball kicked hard, short punchy thump", n=3, purpose="sfx", description="kick_heavy")""")
 async def generate_sfx(
@@ -104,12 +106,14 @@ async def generate_sfx(
 
 언제: 마음에 드는 효과음을 찾은 뒤 반복 재생용 테이크(발소리·타격·총소리 2~5개)를 늘릴 때, 특정 구간만 고칠 때.
 언제 쓰지 말 것: 음악·멜로디·사람 목소리(품질 보장 안 됨).
-입력: 0.5~10초(길면 먼저 trim_silence). 출력: 항상 10초·모노 → trim_silence 필요.
+입력: 0.5~10초(길면 먼저 trim_silence). 0.5초보다 짧은 단발(split_events 조각 등)은 뒤에 무음을 붙여 0.5초로 맞춰 보낸다
+  (실측: 0.27초 킥을 0.6초로 패딩해 정상 동작). 출력(실측): 모노, 길이 가변(대개 입력 길이 근처, 가끔 10초) → trim_silence.
 인자:
 - strength 0.0~3.0(기본 1.0): 높을수록 원본과 차이가 커짐. 원본 느낌 유지는 0.3~0.6, 실험적이면 1.5 이상.
 - include_begin/include_end(초): 이 구간만 새로 만들고 나머지는 원본 유지. 둘 다 생략하면 전체 변형.
 - n: 1~{settings.max_candidates}(API 는 한 번에 5개까지, 넘으면 나눠 호출).
-비용: 호출당 약 {C_VAR} 크레딧(5개까지 한 호출).
+실측 strength 효과(단일 킥 기준): 0.3 → 원본과 거의 같은 밝기·저역(무게중심 ~230Hz), 2.0 → 더 밝고(~600Hz) 가볍고 레벨이 5dB 정도 낮아짐.
+비용: 호출당 약 {C_VAR} 크레딧(5개까지 한 호출). 시간: 실측 3~6초.
 예: generate_from_sample(source="C:/.../sfx_kick_heavy_20261028_01_trim.wav", n=3, strength=0.5)""")
 async def generate_from_sample(
     source: AudioPath,
@@ -192,7 +196,7 @@ async def creature_voice(
 
 언제: 직접 녹음한 대사·가이드 음성의 잡음 제거.
 언제 쓰지 말 것: 효과음·자연음·음악(잡음으로 보고 깎아 먹음), 클리핑으로 찢어진 녹음 복구.
-출력: 44.1kHz 16bit WAV. 최대 입력 길이는 문서에 없음.
+출력: 문서상 44.1kHz 16bit WAV(실측 전). 최대 입력 길이는 문서에 없음.
 비용: 호출당 약 {C_ENH} 크레딧.
 예: enhance_speech(source="C:/.../line_attack_raw.wav")""")
 async def enhance_speech(
@@ -210,7 +214,8 @@ async def enhance_speech(
 @mcp.tool(description="""오디오 파일 하나를 수치로 분석하고 각 수치를 짧게 해석한다. 너는 소리를 못 들으므로 생성·후처리 후 항상 쓴다.
 
 지표: duration_s, effective_duration_s(앞뒤 무음 제외), peak_dbfs, rms_dbfs, integrated_lufs(0.4초 미만은 null),
-leading/trailing_silence_ms, silence_ratio, attack_ms(소리 시작→최대), decay_ms(최대→-20dB),
+leading/trailing_silence_ms, silence_ratio, event_count(파일 안 소리 개수), first_event_duration_s,
+attack_ms(첫 소리 시작→최대), decay_ms(첫 소리 최대→-20dB),
 spectral_centroid_hz(밝기), low/mid/high_ratio(20-250 / 250-4k / 4k+ Hz 에너지 비율), clipping_runs, stereo_width(side/mid), stereo_correlation.
 해석 문구는 일반적인 효과음 기준의 휴리스틱이다(예: 어택<10ms 매우 날카로움, 무게중심<800Hz 어둡고 묵직함).
 인자: silence_db — 무음으로 볼 레벨(기본 -50dBFS). 잔향 꼬리를 소리로 치려면 -60.
@@ -253,7 +258,7 @@ Overwrite = Annotated[bool, Field(description="output_path 가 이미 있을 때
 
 @mcp.tool(description="""앞뒤 무음을 잘라 새 파일로 저장한다(원본 유지).
 
-언제: generate_sfx/generate_from_sample 결과(항상 10초) 직후 거의 항상. 끝이 뚝 끊기면 이어서 fade(fade_out_ms=20~50).
+언제: generate_sfx/generate_from_sample 결과 직후 거의 항상(앞뒤 무음·잔향 꼬리 정리). 끝이 뚝 끊기면 이어서 fade(fade_out_ms=20~50).
 인자: threshold_db(기본 -50dBFS, 잔향을 더 남기려면 -60), pad_ms(자른 경계에 남길 여유, 기본 10ms), trim_start/trim_end.
 비용: 0. 예: trim_silence(path="C:/.../sfx_kick_heavy_20261028_01.wav")""")
 async def trim_silence(
@@ -268,6 +273,25 @@ async def trim_silence(
 ) -> dict[str, Any]:
     return await _guard(lambda: service.trim_silence(path, threshold_db, pad_ms, trim_start, trim_end,
                                                      output_path, overwrite, note))
+
+
+@mcp.tool(description="""한 파일에 여러 번 들어 있는 소리(예: 킥 4~6번)를 하나씩 잘라 '원본_ev01.wav, _ev02 …' 로 저장한다(원본 유지).
+
+언제: analyze_audio 의 event_count 가 2 이상인데 단발 효과음 하나가 필요할 때. generate_sfx 결과는 한 파일에
+  같은 소리를 여러 번 담아 오는 경우가 많다(실측). 잘라 낸 조각들은 그대로 '변형 후보'로도 쓸 수 있다.
+언제 쓰지 말 것: 이어지는 환경음(한 덩어리로 잡힘), 일부러 연속된 소리(연타·발소리 시퀀스)를 통째로 쓸 때.
+판정 기준: 파일 최대 레벨 -15dB 위로 올라온 곳을 소리 시작, -30dB 아래로 내려간 곳을 끝으로 보고, 앞뒤를 무음 임계값까지 넓힌다.
+인자: silence_db(기본 -50, 꼬리를 더 남기려면 -60), pad_ms(기본 10), min_event_ms(이보다 짧은 조각은 버림, 기본 30), output_dir(생략 시 원본 폴더).
+비용: 0. 예: split_events(path="C:/.../sfx_kick_heavy_20261028_01.wav")""")
+async def split_events(
+    path: AudioPath,
+    silence_db: Annotated[float, Field(description="무음 임계값 dBFS", le=0, ge=-100)] = -50.0,
+    pad_ms: Annotated[float, Field(description="조각 앞뒤 여유(ms)", ge=0, le=1000)] = 10.0,
+    min_event_ms: Annotated[float, Field(description="최소 조각 길이(ms)", ge=0, le=5000)] = 30.0,
+    output_dir: Annotated[str | None, Field(description="저장 폴더(생략 시 원본 폴더)")] = None,
+    note: Note = None,
+) -> dict[str, Any]:
+    return await _guard(lambda: service.split_events(path, silence_db, pad_ms, min_event_ms, output_dir, note))
 
 
 @mcp.tool(description="""목표 라우드니스(LUFS) 또는 피크(dBFS)로 레벨을 맞춰 새 파일로 저장한다.

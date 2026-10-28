@@ -67,7 +67,7 @@ claude mcp add --scope user varco-sound -- "C:/Users/52487/mcp/nc-ai-mcp/.venv/S
 | 생성 | `creature_voice` | conversion | ~3.8 |
 | 생성 | `enhance_speech` | enhance | ~3.8 |
 | 분석 | `analyze_audio`, `compare_audio` | 로컬 | 0 |
-| 후처리 | `trim_silence`, `normalize`, `fade`, `convert` | 로컬 | 0 |
+| 후처리 | `trim_silence`, `split_events`, `normalize`, `fade`, `convert` | 로컬 | 0 |
 | 관리 | `check_credits`, `estimate_cost`, `list_history` | 로컬 | 0 |
 | 확인 | `build_audition_page` | 로컬 HTML | 0 |
 | 가이드 | `get_guide`, resource `varco://guide` | — | 0 |

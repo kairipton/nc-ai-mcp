@@ -23,7 +23,7 @@ def tools():
 
 def test_all_tools_have_examples_and_cost():
     ts = tools()
-    assert len(ts) == 17
+    assert len(ts) == 18
     for name, t in ts.items():
         desc = t.description or ""
         assert "비용" in desc, name

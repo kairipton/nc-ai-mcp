@@ -40,7 +40,6 @@ ENDPOINTS: dict[str, EndpointSpec] = {
 T2S_PROMPT_MAX_CHARS = 200
 T2S_MAX_PER_CALL = 3
 T2S_VERSIONS = ("v1", "v2")
-T2S_OUTPUT_S = 10.0
 
 # Variation
 VAR_MAX_PER_CALL = 5
@@ -49,8 +48,8 @@ VAR_STRENGTH_RANGE = (0.0, 3.0)
 # Conversion
 CONV_RATIO_RANGE = (0.0, 2.0)
 
-# 모든 출력: 44.1kHz 16bit WAV
-OUTPUT_SAMPLE_RATE = 44100
+# 출력 포맷: 문서는 44.1kHz 16bit WAV 라고 하지만, 실측(2026-10-28)은 48kHz 16bit 모노 WAV.
+# 길이도 문서("10초 고정")와 달리 가변이다. 코드는 실제 파일을 읽어 판단하므로 값을 가정하지 않는다.
 
 
 def estimate_credits(endpoint: str, calls: int = 1, samples: int = 0) -> float:
