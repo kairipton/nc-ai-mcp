@@ -24,7 +24,8 @@ output/              생성 결과 기본 폴더(git 제외)
 ## 설치
 
 ```bash
-cd ~/mcp/nc-ai-mcp
+git clone https://github.com/kairipton/nc-ai-mcp.git C:/Works/nc-ai-mcp
+cd C:/Works/nc-ai-mcp
 uv sync                      # Python 3.12 가상환경(.venv) + 의존성
 cp .env.example .env         # VARCO_API_KEY=<키> 입력 (git 제외)
 uv run pytest                # 단위 테스트(API 모킹, 크레딧 0)
@@ -33,14 +34,14 @@ uv run pytest                # 단위 테스트(API 모킹, 크레딧 0)
 ## 등록 (사용자 범위 — 모든 프로젝트에서 보임)
 
 ```bash
-claude mcp add --scope user varco-sound -- "C:/Users/52487/mcp/nc-ai-mcp/.venv/Scripts/python.exe" "C:/Users/52487/mcp/nc-ai-mcp/varco_sound/server.py"
+claude mcp add --scope user varco-sound -- "C:/Works/nc-ai-mcp/.venv/Scripts/python.exe" "C:/Works/nc-ai-mcp/varco_sound/server.py"
 ```
 
 사용 스킬(작업 절차)은 저장소의 `skills/` 에 두고, 사용자 스킬 폴더에 디렉터리 정션으로 연결한다(파일은 한 벌).
 PowerShell:
 
 ```powershell
-New-Item -ItemType Junction -Path "$HOME\.claude\skills\varco-sound" -Target "$HOME\mcp\nc-ai-mcp\skills\varco-sound"
+New-Item -ItemType Junction -Path "$HOME\.claude\skills\varco-sound" -Target "C:\Works\nc-ai-mcp\skills\varco-sound"
 ```
 
 키는 `-e VARCO_API_KEY=...` 로 넘기지 않고 저장소 루트의 `.env` 에서 읽는다. `-e` 를 쓰면 키가
