@@ -1,0 +1,12 @@
+# config.toml 로 복사해 쓴다. API 키는 여기 두지 않는다(.env 또는 환경 변수 VARCO_API_KEY).
+# 같은 항목을 환경 변수로 주면 환경 변수가 우선한다.
+
+[api]                                    # 모든 서버 공통
+base_url = "https://openapi.ai.nc.com"   # VARCO_BASE_URL
+timeout_s = 180                          # VARCO_TIMEOUT — 요청 하나의 제한 시간(초)
+max_retries = 3                          # VARCO_MAX_RETRIES — 429/5xx/네트워크 오류 재시도 횟수
+
+[varco_sound]
+output_dir = "C:/Users/52487/mcp/nc-ai-mcp/output/varco_sound"  # VARCO_OUTPUT_DIR — 후보 보관 폴더
+default_format = "wav"                   # VARCO_DEFAULT_FORMAT — convert 의 기본 포맷 (wav/ogg/mp3/flac)
+max_candidates = 12                      # VARCO_MAX_CANDIDATES — 한 번에 뽑을 수 있는 후보 상한(크레딧 보호)

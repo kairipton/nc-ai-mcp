@@ -1,0 +1,6 @@
+.env
+.venv/
+output/
+__pycache__/
+.pytest_cache/
+manifest.json.lock
