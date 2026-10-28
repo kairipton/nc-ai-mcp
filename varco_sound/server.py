@@ -25,7 +25,7 @@ from nc_ai_common.errors import NcAiError, redact
 from varco_sound.api_spec import estimate_credits
 from varco_sound.settings import load_settings
 from varco_sound.guide import GUIDE
-from varco_sound.service import VarcoService
+from varco_sound.service import MODE_RULES, VarcoService
 
 log = logging.getLogger("varco_sound.server")
 settings = load_settings()
@@ -35,7 +35,10 @@ INSTRUCTIONS = (
     "NC AI VARCO Sound API 로 게임 효과음을 생성·변형·루프화하고, 로컬에서 분석·후처리하는 서버. "
     "너는 소리를 들을 수 없으므로 생성 후 반드시 analyze_audio/compare_audio 수치로 판단하라. "
     "API 는 시드·비동기·잔액 조회를 지원하지 않는다. 처음 쓰면 get_guide 를 먼저 읽어라. "
-    f"모든 생성 결과의 기본 저장 폴더: {settings.output_dir}"
+    f"모든 생성 결과의 기본 저장 폴더: {settings.output_dir}. "
+    f"크레딧 모드: {settings.credit_mode} (세션 예산 {settings.session_budget or '상한 없음'} 크레딧, 서버가 초과 호출을 거부). "
+    f"모드 규칙: {MODE_RULES[settings.credit_mode]} "
+    "사용자가 대화에서 더 아끼라고 하면 더 엄격하게 따르되, 예산·모드를 올리는 것은 사용자만 결정한다."
 )
 
 mcp = MCPServer("varco-sound", instructions=INSTRUCTIONS)
@@ -86,6 +89,7 @@ AudioPath = Annotated[str, Field(description="오디오 파일 절대 경로(wav
 인자:
 - prompt: 최대 200자. 한국어·영어 모두 이해. 핵심 음원/재질 + 동작 + 공간 + 성격 위주로 짧게.
 - n: 후보 수 1~{settings.max_candidates}. API 가 한 번에 3개까지라 3개 단위로 나눠 호출한다.
+  비용 대부분이 호출 기본료라 n 은 3의 배수가 효율적(n=3 약 {C_T2S3}, n=4 는 2회 호출로 약 13.8).
 - version: v1(기본) 또는 v2. 차이는 문서에 없음.
 비용: 호출 1회(3개) 약 {C_T2S3} 크레딧, 1개면 약 {C_T2S} 크레딧(문서 단가 추정). 시간: 실측 호출(3개)당 약 10~11초.
 반환: files[{{path, duration_s, sample_rate, channels, quick_metrics}}], params, request_ids, manifest_id, credits_estimated.
@@ -356,15 +360,18 @@ async def convert(
 
 # ================================================================ 관리
 
-@mcp.tool(description="""이번 세션(이 서버 프로세스)의 API 호출 수와 추정 소모 크레딧을 돌려준다.
+@mcp.tool(description="""크레딧 모드·세션 예산·남은 예산과 이번 세션의 API 호출 수, 추정 소모 크레딧을 돌려준다.
 
+언제: 소리 작업을 시작할 때 먼저 호출해 credit_mode 와 mode_rules(이번 세션에서 지킬 작업 규칙)를 확인한다.
+세션 예산을 넘는 생성 호출은 서버가 session_budget_exceeded 로 거부한다. 예산·모드 변경은 사용자만 결정한다.
 주의: 공개 API 에 잔액 조회가 없어 credits_remaining 은 항상 null. 잔액은 사용자가 대시보드에서 확인해야 한다.
 비용: 0.""")
 async def check_credits() -> dict[str, Any]:
     return await _guard(service.check_credits)
 
 
-@mcp.tool(description="""크레딧을 쓰는 도구를 호출하기 전에 예상 크레딧을 계산한다(문서 단가 기준 추정).
+@mcp.tool(description="""크레딧을 쓰는 도구를 호출하기 전에 예상 크레딧과 세션 예산 안인지(within_budget)를 계산한다(문서 단가 기준 추정).
+같은 호출 수로 더 많이 받을 수 있으면 efficiency_tip 으로 알려 준다.
 
 인자: tool(generate_sfx, generate_from_sample, make_loop, mono_to_stereo, creature_voice, enhance_speech), n(후보/호출 수).
 비용: 0(계산만). 예: estimate_cost(tool="generate_sfx", n=6) → 2회 호출, 약 15.3 크레딧""")

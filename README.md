@@ -51,6 +51,8 @@ claude mcp add --scope user varco-sound -- "C:/Users/52487/mcp/nc-ai-mcp/.venv/S
 | 사운드 후보 저장 폴더 | `VARCO_OUTPUT_DIR` | `[varco_sound] output_dir` | `./output/varco_sound` |
 | 변환 기본 포맷 | `VARCO_DEFAULT_FORMAT` | `[varco_sound] default_format` | `wav` |
 | 후보 수 상한 | `VARCO_MAX_CANDIDATES` | `[varco_sound] max_candidates` | 12 |
+| 크레딧 모드 | `VARCO_CREDIT_MODE` | `[varco_sound] credit_mode` | `normal` |
+| 세션 예산(크레딧) | `VARCO_SESSION_BUDGET` | `[varco_sound] session_budget` | 모드 기본값 |
 
 ---
 
@@ -73,6 +75,19 @@ claude mcp add --scope user varco-sound -- "C:/Users/52487/mcp/nc-ai-mcp/.venv/S
 | 가이드 | `get_guide`, resource `varco://guide` | — | 0 |
 
 크레딧은 문서 단가 기준 추정치(1크레딧=$0.01). 호출당 최소 차감량 때문에 실제와 다를 수 있다.
+
+### 크레딧 모드
+
+| 모드 | 세션 예산(서버 강제) | 작업 방식(스킬 규칙, 소리 1개 기준) |
+|---|---|---|
+| `saver` 절약 | 20 | 첫 생성 1회(3개), 재생성 최대 1회, 변형은 split_events 조각만 |
+| `normal` 보통 | 60 | 첫 생성 1회(3개), 재생성 최대 2회, 조각이 부족하면 Variation 1회 |
+| `flex` 플렉스 | 200 | 첫 생성 2회(6개), 재생성 최대 3회, Variation 적극 사용 |
+
+- 세션 = MCP 서버 프로세스 하나 = Claude Code 세션 하나. 예산을 넘는 생성 호출은 첫 호출 전에 거부한다(`session_budget_exceeded`).
+- 바꾸는 법: `config.toml` 에 `[varco_sound] credit_mode = "saver"` (또는 `session_budget = 30`) → **새 세션**부터 적용.
+- 대화에서 "아껴서" 라고 하면 Claude 는 설정보다 엄격하게 따른다. 예산을 올리는 것은 사용자만 한다.
+- 절약 핵심: 비용 대부분이 호출 기본료(약 5.4)라 후보 수보다 **호출 횟수**를 줄인다. n 은 3의 배수가 효율적.
 
 ### API 에 없어서 만들지 않은 것
 - `regenerate`(시드 재현): API 가 시드를 지원하지 않는다.

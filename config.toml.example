@@ -10,3 +10,5 @@ max_retries = 3                          # VARCO_MAX_RETRIES — 429/5xx/네트�
 output_dir = "C:/Users/52487/mcp/nc-ai-mcp/output/varco_sound"  # VARCO_OUTPUT_DIR — 후보 보관 폴더
 default_format = "wav"                   # VARCO_DEFAULT_FORMAT — convert 의 기본 포맷 (wav/ogg/mp3/flac)
 max_candidates = 12                      # VARCO_MAX_CANDIDATES — 한 번에 뽑을 수 있는 후보 상한(크레딧 보호)
+credit_mode = "normal"                   # VARCO_CREDIT_MODE — saver(세션 예산 20) / normal(60) / flex(200)
+# session_budget = 60                    # VARCO_SESSION_BUDGET — 모드 기본 예산 대신 직접 지정(크레딧). 0 이하는 상한 없음

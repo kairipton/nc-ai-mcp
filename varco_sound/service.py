@@ -22,6 +22,14 @@ from nc_ai_common.errors import NcAiError, invalid
 SERVICE = "VARCO Sound"
 SEED_NOTE = "VARCO Sound API 는 시드를 지원하지 않습니다. 같은 파라미터로도 매번 다른 결과가 나옵니다."
 REMAINING_NOTE = "공개 API 에 크레딧 잔액 조회가 없습니다. 대시보드(platform.nc-ai.com › 대시보드 › 현황)에서 확인하세요."
+# 모드별 작업 규칙 요약(상세는 SKILL.md). check_credits 와 서버 instructions 로 Claude 에게 전달된다.
+MODE_RULES = {
+    "saver": "절약: 소리 1개당 generate_sfx 1회(n=3) + 재생성 최대 1회. 변형은 split_events 조각만(Variation 금지). "
+             "loop/stereo/creature 등 부가 API 는 사용자가 요청할 때만.",
+    "normal": "보통: 소리 1개당 generate_sfx 1회(n=3) + 재생성 최대 2회. 변형은 split_events 조각 먼저, "
+              "부족하면 generate_from_sample 1회.",
+    "flex": "플렉스: 소리 1개당 첫 생성 n=6(2회) + 재생성 최대 3회. 변형이 필요하면 generate_from_sample 을 적극 사용.",
+}
 QUICK_METRICS = ("effective_duration_s", "event_count", "peak_dbfs", "integrated_lufs", "attack_ms", "decay_ms",
                  "spectral_centroid_hz", "low_ratio", "high_ratio")
 
@@ -58,6 +66,33 @@ class VarcoService:
         self.credits_spent = round(self.credits_spent + credits, 2)
         return result, credits
 
+    def budget_status(self) -> dict[str, Any]:
+        """크레딧 모드·세션 예산·남은 예산(추정)."""
+        budget = self.settings.session_budget
+        return {
+            "credit_mode": self.settings.credit_mode,
+            "session_budget": budget,
+            "session_credits_estimated": self.credits_spent,
+            "session_remaining": None if budget is None else round(budget - self.credits_spent, 2),
+        }
+
+    def _check_budget(self, planned: float) -> None:
+        """이번 작업의 예상 크레딧이 세션 예산을 넘으면 API 를 부르기 전에 막는다."""
+        budget = self.settings.session_budget
+        if budget is None or self.credits_spent + planned <= budget + 1e-9:
+            return
+        remaining = round(budget - self.credits_spent, 2)
+        raise NcAiError(
+            "session_budget_exceeded",
+            f"이번 작업 예상 {planned:.2f} 크레딧이 세션 남은 예산 {remaining:.2f} 를 넘습니다 "
+            f"(모드 {self.settings.credit_mode}, 예산 {budget}, 사용 {self.credits_spent}).",
+            allowed=f"<= {remaining:.2f} 크레딧",
+            fix="후보 수(n)를 줄이거나 이미 만든 후보(list_history·split_events 조각)로 진행하세요. "
+                "예산을 늘리는 것은 사용자만 결정한다: 사용자에게 상황을 알리고, 사용자가 원하면 "
+                "config.toml [varco_sound] credit_mode/session_budget 을 바꾼 뒤 새 세션을 열게 하세요.",
+            extra=self.budget_status(),
+        )
+
     def _save(self, audios: list[bytes], folder: Path, purpose: str, description: str) -> list[dict[str, Any]]:
         files = []
         for blob in audios:
@@ -78,6 +113,8 @@ class VarcoService:
                         params: dict[str, Any], folder: Path, purpose: str, description: str,
                         note: str | None, parents: list[str]) -> dict[str, Any]:
         """payloads 를 순서대로 호출. 중간에 실패하면 이미 저장한 파일을 오류에 담아 알린다."""
+        # 예산 검사는 전체 작업(모든 배치) 기준으로, 첫 호출 전에 한 번 한다.
+        self._check_budget(sum(estimate_credits(endpoint, 1, samples) for _, samples in payloads))
         files: list[dict[str, Any]] = []
         request_ids: list[str] = []
         credits = 0.0
@@ -112,7 +149,7 @@ class VarcoService:
             "credits_estimated": round(credits, 2),
             "credits_remaining": None,
             "credits_note": REMAINING_NOTE,
-            "session_credits_estimated": self.credits_spent,
+            **self.budget_status(),
             "created_at": rec["created_at"],
         }
 
@@ -335,7 +372,8 @@ class VarcoService:
         return {
             "credits_remaining": None,
             "note": REMAINING_NOTE,
-            "session_credits_estimated": self.credits_spent,
+            **self.budget_status(),
+            "mode_rules": MODE_RULES[self.settings.credit_mode],
             "session_calls": dict(self.calls),
             "session_samples": dict(self.samples),
             "estimate_basis": "문서 단가 기준 추정(1크레딧=$0.01). 호출당 최소 차감량 때문에 실제와 다를 수 있음.",
@@ -352,10 +390,21 @@ class VarcoService:
         per_call = {"text2sound": T2S_MAX_PER_CALL, "variation": VAR_MAX_PER_CALL}.get(endpoint, 1)
         calls = -(-n // per_call) if per_call > 1 else n
         samples = n if endpoint == "text2sound" else 0
-        return {"tool": tool, "n": n, "api_calls": calls,
-                "credits_estimated": estimate_credits(endpoint, calls, samples),
-                "usd_estimated": round(estimate_credits(endpoint, calls, samples) * 0.01, 4),
-                "note": "문서 단가 기준 추정. 호출당 최소 차감량이 적용될 수 있음."}
+        credits = estimate_credits(endpoint, calls, samples)
+        result = {"tool": tool, "n": n, "api_calls": calls, "credits_estimated": credits,
+                  "usd_estimated": round(credits * 0.01, 4),
+                  "note": "문서 단가 기준 추정. 호출당 최소 차감량이 적용될 수 있음."}
+        # 같은 호출 수로 더 받을 수 있으면 알려 준다(호출 기본료가 대부분이라 꽉 채우는 게 이득).
+        if per_call > 1 and n % per_call:
+            full = calls * per_call
+            extra = round(estimate_credits(endpoint, calls, full if endpoint == "text2sound" else 0) - credits, 2)
+            result["efficiency_tip"] = (f"같은 {calls}회 호출로 {full}개까지 받을 수 있습니다(+{extra} 크레딧). "
+                                        f"호출 수를 줄이려면 n 을 {per_call}의 배수로 맞추세요.")
+        budget = self.budget_status()
+        result.update(budget)
+        if budget["session_remaining"] is not None:
+            result["within_budget"] = credits <= budget["session_remaining"] + 1e-9
+        return result
 
     def list_history(self, folder: str | None = None, query: str | None = None, tool: str | None = None,
                      limit: int = 20) -> dict[str, Any]:

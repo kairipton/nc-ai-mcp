@@ -233,3 +233,50 @@ def test_split_events_records_manifest(svc, tmp_path):
     rec = manifest.load(tmp_path)[0]
     assert rec["tool"] == "split_events" and len(rec["files"]) == 3 and rec["parents"] == [str(src)]
     assert res["outputs"][0]["quick_metrics"]["event_count"] == 1
+
+
+# ---------------- 크레딧 모드·세션 예산
+
+def budget_svc(tmp_path, client_factory, budget, mode="normal"):
+    from dataclasses import replace
+    from varco_sound.service import VarcoService
+    from .conftest import make_settings
+    return VarcoService(replace(make_settings(tmp_path), credit_mode=mode, session_budget=budget), client_factory())
+
+
+def test_budget_blocks_before_calling_api(tmp_path, client_factory, api):
+    svc = budget_svc(tmp_path, client_factory, budget=10, mode="saver")
+    run(svc.generate_sfx("kick", n=3))          # 약 7.65 → 통과
+    with pytest.raises(NcAiError) as e:
+        run(svc.generate_sfx("kick", n=3))      # 누적 15.3 > 10 → 거부
+    d = e.value.to_dict()
+    assert d["error"] == "session_budget_exceeded" and d["credit_mode"] == "saver"
+    assert d["session_remaining"] == pytest.approx(2.35) and "사용자" in d["fix"]
+    assert len(api.requests) == 1
+
+
+def test_budget_checks_whole_job_not_first_batch(tmp_path, client_factory, api):
+    svc = budget_svc(tmp_path, client_factory, budget=10)
+    with pytest.raises(NcAiError):
+        run(svc.generate_sfx("kick", n=6))      # 2회 15.3 → 첫 배치도 보내지 않음
+    assert not api.requests
+
+
+def test_unlimited_budget(tmp_path, client_factory, api):
+    svc = budget_svc(tmp_path, client_factory, budget=None)
+    run(svc.generate_sfx("kick", n=12))
+    assert svc.budget_status()["session_remaining"] is None
+
+
+def test_estimate_reports_budget_and_efficiency(svc):
+    est = svc.estimate_cost("generate_sfx", 4)
+    assert est["api_calls"] == 2 and "6개" in est["efficiency_tip"]
+    assert est["within_budget"] is True and est["credit_mode"] == "normal"
+    assert "efficiency_tip" not in svc.estimate_cost("generate_sfx", 3)
+    status = svc.check_credits()
+    assert status["session_budget"] == 60 and "보통" in status["mode_rules"]
+
+
+def test_result_carries_budget_status(svc, api):
+    res = run(svc.generate_sfx("kick", n=3))
+    assert res["session_remaining"] == pytest.approx(60 - 7.65)
