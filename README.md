@@ -13,6 +13,7 @@ NC AI API Platform(platform.nc-ai.com) 서비스를 감싼 MCP 서버 모음. �
 ```text
 nc_ai_common/        모든 서버 공통: 설정(.env·config.toml), HTTP(재시도·오류 변환·키 마스킹), 오류 형식, manifest 기록
 varco_sound/         VARCO Sound 서버 (server.py 가 진입점)
+skills/              Claude 사용 스킬(SKILL.md) — 사용자 스킬 폴더에 정션으로 연결
 tests/common/        공통 코드 테스트
 tests/varco_sound/   사운드 서버 테스트
 output/              생성 결과 기본 폴더(git 제외)
@@ -33,6 +34,13 @@ uv run pytest                # 단위 테스트(API 모킹, 크레딧 0)
 
 ```bash
 claude mcp add --scope user varco-sound -- "C:/Users/52487/mcp/nc-ai-mcp/.venv/Scripts/python.exe" "C:/Users/52487/mcp/nc-ai-mcp/varco_sound/server.py"
+```
+
+사용 스킬(작업 절차)은 저장소의 `skills/` 에 두고, 사용자 스킬 폴더에 디렉터리 정션으로 연결한다(파일은 한 벌).
+PowerShell:
+
+```powershell
+New-Item -ItemType Junction -Path "$HOME\.claude\skills\varco-sound" -Target "$HOME\mcp\nc-ai-mcp\skills\varco-sound"
 ```
 
 키는 `-e VARCO_API_KEY=...` 로 넘기지 않고 저장소 루트의 `.env` 에서 읽는다. `-e` 를 쓰면 키가
@@ -129,4 +137,4 @@ build_audition_page(paths=[...])
 | `varco_sound/audition.py` | 청취 비교 HTML |
 | `varco_sound/guide.py` | 프롬프트 가이드 |
 
-사용 스킬: `~/.claude/skills/varco-sound/SKILL.md` (저장소 밖, 사용자 범위)
+사용 스킬: `skills/varco-sound/SKILL.md` (`~/.claude/skills/varco-sound` 에 정션으로 연결)

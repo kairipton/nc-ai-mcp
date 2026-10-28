@@ -20,7 +20,12 @@ GUIDE = """\
   → 단발 효과음이 필요하면 `analyze_audio` 의 event_count 를 보고 `split_events` 로 나눈다.
   → 나뉜 조각들은 같은 소리의 서로 다른 테이크라, 그대로 랜덤 재생용 변형 세트로 쓸 수 있다(Variation 크레딧 절약).
 - [실측] Variation: 48kHz 모노, 길이 가변(0.6초 입력 → 대부분 0.32초, 한 번은 10.24초). 피크는 원본보다 낮게 나올 수 있음.
-- [실측] 응답 시간: Text to Sound 3개 약 10~11초, Variation 2개 약 3~6초. request_id 는 응답에 없음.
+- [실측] 환경음(관중 웅성임): 6.5~9.1초, 한 덩어리(event_count 1), 피크는 -2dBFS 가 아님(-4.5~-7.2). 즉 피크 정규화는 항상은 아니다.
+- [실측] 몬스터 울음: 1.6~3.8초, 떨리는 긴 소리 1~3개.
+- [실측] 샘플레이트가 기능마다 다르다: Text to Sound·Variation·Looping·Mono to Stereo 는 48kHz,
+  Conversion·Enhance 는 44.1kHz. 게임에 넣기 전 convert 로 프로젝트 샘플레이트에 맞춘다.
+- [실측] 응답 시간: Text to Sound 3개 약 10~17초, Variation 2개 약 3~6초, Looping·Conversion·Enhance 1~2초,
+  Mono to Stereo 약 5초. request_id 는 응답에 없음.
 - [문서] 시드 없음: 같은 프롬프트도 매번 다름 → 후보를 여러 개 뽑아 비교하는 게 기본 전략.
 - [문서] Looping 결과는 입력보다 짧아짐(정상). Mono to Stereo 결과는 2채널.
 
@@ -46,14 +51,25 @@ GUIDE = """\
 - [문서] Looping preserve(begin,end): 루프 처리 중 잘리면 안 되는 구간.
 - [문서] Conversion ratio(0~2, 기본 1): 0 에 가까우면 원본 음색, 클수록 참조 스타일이 강함.
   1.2 이상이면 참조 음색과도 멀어질 수 있음. enhance=true 면 소스 잡음 제거 후 변환.
+- [실측, ratio 1.0 1건] 결과 피크 0dBFS·클리핑 흔적 7곳. ratio 를 바꾼 비교는 아직 없음.
+
+## 4-1. 후처리형 기능 실측
+- [실측] Looping: 9.1초 환경음 → 7.9초. 원본은 끝이 무음으로 사라졌는데(끝 -94dB) 결과는 끝·처음 레벨이 맞음(-18/-19dB).
+- [실측] Mono to Stereo: 좌우가 거의 독립(상관≈0, 폭≈1.0)인 매우 넓은 스테레오. 레벨 +2dB → normalize 필요.
+- [실측] Enhance: SNR 10dB 잡음 음성에서 말 없는 구간 잡음 약 38dB 감소, 말소리 크기 유지.
 
 ## 5. 게임 효과음 종류별 출발점
 - 타격·킥 [실측]: "heavy leather football kicked hard, short punchy thump", version=v2 →
   split_events 로 단발 추출 → compare_audio 로 어둡고(무게중심 <500Hz) 짧은(첫 소리 <0.35초) 것 고르기.
-- UI 클릭·득점·실패·환경음: 아직 실측 없음. 위 구조로 프롬프트를 쓰고, 결과를 이 가이드에 [실측]으로 추가한다.
+- 경기장 환경음 [실측]: "busy football stadium crowd ambience, distant murmur and chatter" → 한 덩어리 6~9초.
+  make_loop 실측은 이 결과를 자르지 않고 그대로 넣어 확인했다.
+- 크리처 참조음 [실측]: "low guttural monster growl, deep and menacing" → creature_voice 의 reference 로 사용 가능.
+- UI 클릭·득점·실패: 아직 실측 없음. 위 구조로 프롬프트를 쓰고, 결과를 이 가이드에 [실측]으로 추가한다.
 
 ## 6. 흔한 실패와 고치는 법
-- 소리가 여러 번 반복돼 있다 → split_events(실측상 거의 항상).
+- 소리가 여러 번 반복돼 있다 → split_events(타격음은 실측상 거의 항상). 떨리는 긴 소리(울음 등)는
+  80ms 미만의 골은 끊김으로 치지 않는다.
+- 결과에 clipping_runs 가 있다(Conversion 실측) → 노멀라이즈로는 못 고침. 사람에게 들어 보게 하고, 거슬리면 재생성.
 - 소리가 너무 밝다/가볍다 → 프롬프트에 무게·재질(heavy, deep, low thud)을 넣거나 version=v2,
   compare_audio target 에 spectral_centroid_hz·low_ratio 를 넣어 고르기.
 - 변형이 원본과 너무 다르다 → strength 를 0.3~0.6 으로 낮추기.

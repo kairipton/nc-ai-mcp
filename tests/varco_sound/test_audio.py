@@ -159,6 +159,20 @@ def test_split_events_writes_each_hit(tmp_path):
         assert analysis.analyze(__import__("pathlib").Path(o["output"]))["metrics"]["event_count"] == 1
 
 
+def test_tremolo_sound_counts_as_one_event(tmp_path):
+    """으르렁거림처럼 30ms 짧게 푹 꺼지는 떨림은 끊김이 아니다(실측 오판 회귀 방지)."""
+    t = np.arange(int(1.5 * SR)) / SR
+    gate = np.where((t % 0.25) < 0.22, 1.0, 0.001)  # 250ms 마다 30ms 동안 -60dB 로 꺼짐
+    x = (0.5 * np.sin(2 * np.pi * 150 * t) * gate).astype(np.float32)[:, None]
+    assert analysis.analyze(write_wav(tmp_path / "g.wav", x))["metrics"]["event_count"] == 1
+
+
+def test_stereo_low_correlation_warning(tmp_path):
+    rng = np.random.default_rng(0)
+    x = (rng.standard_normal((SR, 2)) * 0.2).astype(np.float32)
+    assert "모노로 합치면" in analysis.analyze(write_wav(tmp_path / "w.wav", x))["interpretation"]["stereo"]
+
+
 def test_split_events_silent_file_errors(tmp_path):
     with pytest.raises(NcAiError):
         processing.split_events(write_wav(tmp_path / "z.wav", np.zeros((SR, 1), dtype=np.float32)))

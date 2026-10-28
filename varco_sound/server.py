@@ -138,7 +138,9 @@ async def generate_from_sample(
 
 언제: 바람·비·관중 웅성임·기계음 같은 지속형 환경음을 배경 루프로 쓸 때.
 언제 쓰지 말 것: 박자가 있는 음악·보컬(루프 지점에서 박자가 어긋남), 단발 효과음.
-입력: 1초~60분. 출력: 입력보다 다소 짧아짐(정상). 너무 짧거나 급변하는 소리는 루프 품질이 떨어짐.
+입력: 1초~60분. 출력: 입력보다 다소 짧아짐(정상, 실측 9.1→7.9초). 너무 짧거나 급변하는 소리는 루프 품질이 떨어짐.
+실측: 48kHz 모노. 끝이 페이드아웃된 환경음도 끝·처음 레벨이 맞춰져 나옴(끝 -18dB / 처음 -19dB). 응답 약 1~2초.
+실측은 generate_sfx 결과를 자르지 않고 그대로 넣은 경우만 확인했다.
 인자: preserve_begin/preserve_end(초) — 루프 처리 중 잘리면 안 되는 구간(예: 중간의 특정 새소리).
 비용: 호출당 약 {C_LOOP} 크레딧.
 예: make_loop(source="C:/.../amb_stadium_crowd_20261028_01.wav")""")
@@ -160,6 +162,8 @@ async def make_loop(
 언제: 환경음·Foley 가 밋밋하게 중앙에만 들릴 때(analyze_audio 의 stereo_width≈0). 스테레오 입력은 모노로 합쳐 보낸다.
 언제 쓰지 말 것: 음악·멜로디(위상 문제), 게임에서 3D 위치로 재생할 소리(3D 공간화는 모노가 유리).
 입력: 0.5~10초. 출력: 2채널. 생성형이라 원본과 질감이 미세하게 달라질 수 있음.
+실측: 48kHz, 폭이 매우 넓음(stereo_width≈1.0, 좌우 상관≈0 — 좌우가 거의 독립). 레벨이 약 2dB 커지고 피크가 -0.4dBFS 까지 올라옴
+→ 이후 normalize 필수. 모노로 합쳐 재생되는 환경(모바일 스피커 등)에선 약해질 수 있음. 응답 약 5초.
 비용: 호출당 약 {C_M2S} 크레딧.
 예: mono_to_stereo(source="C:/.../amb_wind_20261028_01_trim.wav")""")
 async def mono_to_stereo(
@@ -176,7 +180,9 @@ async def mono_to_stereo(
 
 언제: 보스·몬스터·NPC 의 대사/포효/신음. reference 는 generate_sfx 로 만든 'low guttural monster growl' 같은 소리도 가능.
 언제 쓰지 말 것: 노래·멜로디, 사람→사람 음성 변환.
-입력: source·reference 모두 0.5~10초. 출력 길이 = source 길이.
+입력: source·reference 모두 0.5~10초. 출력 길이 = source 길이(실측 4.29→4.28초).
+실측(1건): 44.1kHz 모노, 피크 0dBFS 에 클리핑 흔적 7곳 — 결과의 clipping_runs 를 확인하고, 있으면 들어 보고 판단(노멀라이즈로는 복구 안 됨).
+reference 로 generate_sfx 의 'low guttural monster growl' 결과를 그대로 써도 동작함. 응답 약 1.5초.
 인자:
 - ratio 0.0~2.0(기본 1.0): 0 에 가까우면 원본 음색, 클수록 참조 스타일이 강함. 1.2 이상이면 참조 음색과도 멀어질 수 있음.
 - enhance: source 에 잡음이 많으면 true(내부에서 잡음 제거 후 변환).
@@ -200,7 +206,8 @@ async def creature_voice(
 
 언제: 직접 녹음한 대사·가이드 음성의 잡음 제거.
 언제 쓰지 말 것: 효과음·자연음·음악(잡음으로 보고 깎아 먹음), 클리핑으로 찢어진 녹음 복구.
-출력: 문서상 44.1kHz 16bit WAV(실측 전). 최대 입력 길이는 문서에 없음.
+출력: 44.1kHz 16bit WAV(실측 확인). 최대 입력 길이는 문서에 없음.
+실측(합성 음성 + 백색잡음·120Hz 험, SNR 10dB): 말 없는 구간 잡음 -31.5 → -69.5dB(약 38dB 감소), 말소리 크기 유지. 응답 약 1초.
 비용: 호출당 약 {C_ENH} 크레딧.
 예: enhance_speech(source="C:/.../line_attack_raw.wav")""")
 async def enhance_speech(

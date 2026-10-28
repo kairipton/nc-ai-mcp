@@ -53,6 +53,8 @@ def _clip_runs(data: np.ndarray, level: float = 0.9999, min_run: int = 3) -> int
 
 EVENT_ON_DB = 15.0   # 최대 레벨 - 15dB 위로 올라오면 '타격 시작'
 EVENT_OFF_DB = 30.0  # 최대 레벨 - 30dB 아래로 내려가면 '타격 끝' (히스테리시스로 잔떨림 무시)
+EVENT_SMOOTH_MS = 20.0  # 판정 전에 엔벨로프를 이만큼 평균해 짧은 떨림을 줄인다
+EVENT_MIN_GAP_MS = 80.0  # 이보다 짧게 조용해지는 건 끊김이 아니라 소리 안의 떨림으로 본다(으르렁 등)
 
 
 def detect_events(env: np.ndarray, silence_db: float = DEFAULT_SILENCE_DB) -> list[tuple[int, int, int]]:
@@ -60,7 +62,8 @@ def detect_events(env: np.ndarray, silence_db: float = DEFAULT_SILENCE_DB) -> li
 
     VARCO 는 한 파일에 같은 소리를 여러 번(예: 킥 4~6번) 담아 주는 경우가 있어,
     어택·감쇠를 파일 전체가 아니라 첫 소리 기준으로 재고, split_events 로 나눌 때 쓴다.
-    - 핵심 구간: 최대-15dB 위로 올라왔다가 최대-30dB 아래로 내려갈 때까지
+    - 핵심 구간: 최대-15dB 위로 올라왔다가 최대-30dB 아래로 EVENT_MIN_GAP_MS 이상 머물 때까지
+      (실측: 으르렁거림처럼 떨리는 소리를 짧은 골마다 끊으면 1개를 6~9개로 잘못 센다)
     - 시작: 핵심 구간 앞쪽으로 무음 임계값 위인 곳까지 확장
     - 끝: 뒤쪽으로 무음 임계값 아래가 되거나 다음 소리가 시작되기 직전까지 확장
     """
@@ -69,18 +72,30 @@ def detect_events(env: np.ndarray, silence_db: float = DEFAULT_SILENCE_DB) -> li
     top = float(np.max(env))
     if top <= silence_db:  # 전체가 무음
         return []
-    on, off = top - EVENT_ON_DB, max(top - EVENT_OFF_DB, silence_db)
+    # 판정용 엔벨로프: 파워를 짧게 이동 평균(경계 위치·최대값은 원래 env 로 잰다)
+    k = max(1, int(EVENT_SMOOTH_MS / FRAME_MS))
+    judge = 10 * np.log10(np.maximum(np.convolve(10 ** (env / 10), np.ones(k) / k, mode="same"), 1e-12))
+    judge_top = float(np.max(judge))
+    on, off = judge_top - EVENT_ON_DB, max(judge_top - EVENT_OFF_DB, silence_db)
+    min_gap = max(1, int(EVENT_MIN_GAP_MS / FRAME_MS))
+
     cores: list[list[int]] = []
     active = False
-    for i, v in enumerate(env):
-        if not active and v > on:
-            cores.append([i, i])
-            active = True
-        elif active and v < off:
-            cores[-1][1] = i
-            active = False
+    low_run = 0  # 활성 상태에서 off 아래로 연속 머문 프레임 수
+    for i, v in enumerate(judge):
+        if not active:
+            if v > on:
+                cores.append([i, i])
+                active, low_run = True, 0
+        elif v < off:
+            low_run += 1
+            if low_run >= min_gap:
+                cores[-1][1] = i - low_run + 1  # 조용해지기 시작한 프레임에서 끝
+                active = False
+        else:
+            low_run = 0
     if active:
-        cores[-1][1] = len(env) - 1
+        cores[-1][1] = len(env) - 1 - low_run
 
     events: list[tuple[int, int, int]] = []
     prev_end = -1
@@ -88,6 +103,9 @@ def detect_events(env: np.ndarray, silence_db: float = DEFAULT_SILENCE_DB) -> li
         start = c_start
         while start - 1 > prev_end and env[start - 1] > silence_db:
             start -= 1
+        # 평균 때문에 소리 직전 무음까지 당겨졌을 수 있으니, 실제로 소리가 나는 첫 프레임으로 맞춘다
+        while start < c_end and env[start] <= silence_db:
+            start += 1
         limit = cores[k + 1][0] - 1 if k + 1 < len(cores) else len(env) - 1
         end = c_end
         while end + 1 <= limit and env[end + 1] > silence_db:
@@ -232,6 +250,9 @@ def interpret(m: dict[str, Any]) -> dict[str, str]:
         out["stereo"] = "스테레오 폭 측정 불가"
     else:
         out["stereo"] = f"폭 {w:.2f}: " + ("거의 모노" if w < 0.1 else "보통 폭" if w < 0.5 else "넓음")
+        corr = m["stereo_correlation"]
+        if corr is not None and corr < 0.2:
+            out["stereo"] += f" — 좌우 상관 {corr:.2f}: 좌우가 거의 독립, 모노로 합치면 약해질 수 있음"
     return out
 
 
